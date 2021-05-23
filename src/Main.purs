@@ -4,9 +4,10 @@ import Prelude
 
 import Affjax (get)
 import Affjax.ResponseFormat (string)
-import Data.Array (concat, find, foldl, index, intersect, mapWithIndex, slice, (:))
+import Data.Array (concat, concatMap, find, fromFoldable, index, intersect, mapWithIndex, slice, (:))
 import Data.Date (Date)
 import Data.Either (Either(..))
+import Data.Foldable (class Foldable, foldMap, foldl, foldr, maximum)
 import Data.Int (fromString, toNumber)
 import Data.Map (Map, alter, foldSubmap, insert, lookup, singleton, toUnfoldable)
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -106,11 +107,29 @@ goodFromString _ = Quakzarg
 
 derive instance eqGood :: Eq Good  
 derive instance ordGood :: Ord Good  
- 
+
 type Account = {
   goods :: Map Good Int,
-  balance :: Euro
+  balance :: Euro,
+  id :: Int
 }
+
+linkedAccountA :: Linked Account 
+linkedAccountA = Linked accountA linkedSubAccount
+ 
+data Linked a = Leaf | Linked a (Linked a)  
+
+instance functorLinked :: Functor Linked where
+  map f (Linked a linked) = Linked (f a) (map f linked) 
+  map f Leaf = Leaf
+  
+instance foldableLinked :: Foldable Linked where
+  foldr f acc Leaf = acc
+  foldr f acc (Linked a linked) = foldr f (foldr f (f a acc) linked) linked 
+  foldl f acc Leaf = acc
+  foldl f acc (Linked a linked) = foldl f (foldl f (f acc a) linked) linked 
+  foldMap f Leaf = mempty
+  foldMap f (Linked a linked) = f a <> foldMap f linked  
 
 accountA:: Account
 accountA = {
@@ -119,7 +138,22 @@ accountA = {
   $ insert Inden 100 
   $ insert Zzrimus 7 
   $ singleton Quakzarg 5,
-  balance : Euro 10.0
+  balance : Euro 10.0,
+  id : 0
+}
+
+linkedSubAccount :: Linked Account
+linkedSubAccount = Linked subAccountA Leaf
+
+subAccountA :: Account 
+subAccountA = {
+  goods : 
+  insert Remislu 2
+  $ insert Inden 50
+  $ insert Zzrimus 2 
+  $ singleton Quakzarg 1,
+  balance : Euro 3.0,
+  id : 1
 }
 
 newtype Euro = Euro Number 
@@ -159,7 +193,7 @@ mkAccount account =
     D.div {
       children: [ 
         D.h3 {
-          children: [ D.text "Your Account" ]
+          children: [ D.text $ "Showing Account with ID: " <> show account.id ]
         },
         D.h5 {
           children : [
@@ -338,10 +372,36 @@ mkMyApp = do
   -- incoming \props are unused
   component "MainApp" \apiKey -> R.do
     Tuple transaction setTransaction <- useState Buy 
-    Tuple account setAccount <- useState accountA 
+    Tuple linkedAccount setLinkedAccount <- useState linkedAccountA 
     Tuple chosenGood setChosenGood <- useState Quakzarg
-    Tuple amount setAmount <- useState 0
-    let 
+    Tuple amount setAmount <- useState 0 
+    Tuple accountId setAccountId <- useState 0
+    let
+      setAccount :: SetState Account 
+      setAccount handler = do
+        setLinkedAccount setter 
+        where
+          setter :: Linked Account -> Linked Account
+          setter (Linked act linked) | act.id == accountId = Linked (handler act) linked
+          setter (Linked act linked) = Linked act (setter linked)
+          setter Leaf = Leaf
+
+      account :: Account
+      account = getAccount linkedAccount
+        where 
+          getAccount :: Linked Account -> Account
+          getAccount Leaf = subAccountA
+          getAccount (Linked a Leaf) = a
+          getAccount (Linked a linked) | a.id == accountId = a
+          getAccount (Linked a linked) = getAccount linked 
+      
+      handleChooseAccount :: Maybe String -> Effect Unit
+      handleChooseAccount (Just str) = do 
+        case fromString str of 
+          Just id -> setAccountId \a -> id  
+          Nothing -> setAccountId \a -> 0  
+      handleChooseAccount _ = pure unit
+
       handleChooseTransaction :: Maybe String -> Effect Unit
       handleChooseTransaction (Just "Buy") = setTransaction \x -> Buy  
       handleChooseTransaction (Just "Sell") = setTransaction \x -> Sell 
@@ -374,6 +434,8 @@ mkMyApp = do
               balance = account.balance - fee + value, 
               goods = alter (\v -> map (\i -> i - amount) v) chosenGood account.goods
             }
+      accountIds :: Array Int 
+      accountIds = concat $ map (\a -> [a.id]) (fromFoldable linkedAccount)
 
     pure $
       D.div {
@@ -384,10 +446,20 @@ mkMyApp = do
               D.text "Purescript Trading" 
             ]
           },
-          mkAccount account,
-          D.h4 {
-            children: [ D.text "Buy or Sell" ]
+          D.div {
+            className: "row",
+            children: [
+              D.div { className: "col-sm-10", children: [ D.text "Select Account: " ] },
+              D.select {
+                className: "col-sm-2", 
+                onChange: handler targetValue handleChooseAccount,
+                children: map (\x -> 
+                D.option { children: [ D.text $ show x ] }) accountIds
+              }
+            ] 
           },
+          mkAccount account,
+          D.h4 { children: [ D.text "Buy or Sell" ] },
           D.div {
             className: "mt-2",
             children : [
@@ -424,6 +496,28 @@ mkMyApp = do
                 onChange: handler targetValue chooseAmount 
               }
             ]
+          },
+          D.div {
+            className: "mt-2",
+            children : [
+              D.select {
+                onChange: handler targetValue chooseGood,
+                children: [
+                  D.option {
+                    className: "form-select form-select-lg",
+                    children: [ D.text "Paypal" ]
+                  },
+                  D.option {
+                    className: "form-select form-select-lg",
+                    children: [ D.text "Credit Card" ]
+                  },
+                  D.option {
+                    className: "form-select form-select-lg",
+                    children: [ D.text "SEPA" ]
+                  }
+                ]
+              }
+            ] 
           },
           D.button {
             className: "mt-2 btn btn-secondary",
