@@ -35,7 +35,6 @@ data PaymentType
   = Subscription StartDate BillingCycle Price 
   | OneTimePayment Price
 
-
 data BankTransaction = Buy | Sell
 
 mkMyApp :: Component Unit 
